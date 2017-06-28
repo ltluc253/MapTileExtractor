@@ -11,8 +11,9 @@ import java.util.List;
 
 public class DownloadTask implements Runnable{
 	
-	public static int sFormatOrder = 1;
+	public static int sFormatOrder = 0;
 	public static String BASE_URL = "http://mt3.google.com/vt/v=w2.97&x=%d&y=%d&z=%d";
+	public static String STORAGE_PATH = "MapData";
 	public static int sSuccessCount = 0;
 	public static int sFailCount = 0;
 	public static int sOpenningStream = 0;
@@ -21,11 +22,16 @@ public class DownloadTask implements Runnable{
 	private List<TileItem> mPendingTiles = new ArrayList<>();
 	private int mThreadIndex;
 	private int mThreadCount;
+	private OnTileAvailable mOnTileAvailable;
 	
 	public DownloadTask(List<TileItem> mPendingTiles, int threadIndex, int threadCount) {
 		this.mPendingTiles = mPendingTiles;
 		mThreadIndex = threadIndex;
 		mThreadCount = threadCount;
+	}
+
+	public void setmOnTileAvailable(OnTileAvailable mOnTileAvailable) {
+		this.mOnTileAvailable = mOnTileAvailable;
 	}
 
 	@Override
@@ -48,8 +54,8 @@ public class DownloadTask implements Runnable{
 		}
 	}
 	
-	private static void downloadImage(int zoomLevel, int x, int y) {
-		String fileFolder = "MapData" + File.separator + zoomLevel + File.separator + x;
+	private void downloadImage(int zoomLevel, int x, int y) {
+		String fileFolder = STORAGE_PATH + File.separator + zoomLevel + File.separator + x;
 		File storageFolder = new File(fileFolder);
 		if (!storageFolder.exists()) {
 			storageFolder.mkdirs();
@@ -57,6 +63,9 @@ public class DownloadTask implements Runnable{
 		String destinationFilePath = fileFolder + File.separator + y + (BASE_URL.lastIndexOf(".") > 0 ? BASE_URL.substring(BASE_URL.lastIndexOf(".")) : ".png");
 		if ((new File(destinationFilePath)).exists()) {
 			sSuccessCount += 1;
+			if (mOnTileAvailable != null) {
+				mOnTileAvailable.onTileFileAvailable(zoomLevel, x, y, destinationFilePath);
+			}
 			return;
 		} else {
 			try {
@@ -91,6 +100,9 @@ public class DownloadTask implements Runnable{
 			is.close();
 			os.close();
 			sSuccessCount += 1;
+			if (mOnTileAvailable != null) {
+				mOnTileAvailable.onTileFileAvailable(zoomLevel, x, y, destinationFilePath);
+			}
 		} catch (IOException ioException) {
 			sFailCount += 1;
 			System.out.println("Fail to download file: " + imageUrl + " ------ " + sFailCount);
@@ -114,5 +126,9 @@ public class DownloadTask implements Runnable{
 			sOpenningStream -= 1;
 			sDownloadingThread -= 1;
 		}
+	}
+	
+	interface OnTileAvailable {
+		void onTileFileAvailable(int zoomLv, int x, int y, String filePath);
 	}
 }
