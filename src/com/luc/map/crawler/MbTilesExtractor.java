@@ -32,10 +32,11 @@ import javax.imageio.stream.ImageOutputStream;
 
 import com.luc.map.crawler.DownloadTask.OnTileAvailable;
 
-public class MapAreaExtractor implements OnTileAvailable {
+public class MbTilesExtractor implements OnTileAvailable {
 	
 	private static final String INSERT_CMD = "INSERT INTO tiles (zoom_level,tile_column,tile_row,tile_data) VALUES (?,?,?,?)";
 	public static String EXTRACTED_PATH = "Extracted";
+	public static boolean ONLY_CRAWLER = false; 
 	
 	private MapAreaItem mMapAreaItem;
 	private int fromZl, toZl;
@@ -48,7 +49,7 @@ public class MapAreaExtractor implements OnTileAvailable {
 	private PreparedStatement preparedStatement;
 	private float mCompressQuality = 1.0f;
 	
-	public MapAreaExtractor(MapAreaItem mMapAreaItem, int fromZl, int toZl, int threadCount, float mCompressQuality) {
+	public MbTilesExtractor(MapAreaItem mMapAreaItem, int fromZl, int toZl, int threadCount, float mCompressQuality) {
 		this.mMapAreaItem = mMapAreaItem;
 		this.fromZl = fromZl;
 		this.toZl = toZl;
@@ -95,7 +96,9 @@ public class MapAreaExtractor implements OnTileAvailable {
 	
 	public void startExtract() {
 		System.out.println("Start extract mbtiles of city: " + mMapAreaItem.getTitle());
-		prepareDb();
+		if (!ONLY_CRAWLER) {
+			prepareDb();
+		}
 		double west = Double.parseDouble(mMapAreaItem.getBbox().get(0));
 		double south = Double.parseDouble(mMapAreaItem.getBbox().get(1));
 		double east = Double.parseDouble(mMapAreaItem.getBbox().get(2));
@@ -133,7 +136,9 @@ public class MapAreaExtractor implements OnTileAvailable {
 			// TODO: handle exception
         	e.printStackTrace();
 		} finally {
-			closeDb();
+			if (!ONLY_CRAWLER) {
+				closeDb();
+			}
 		}
 	}
 	
@@ -144,7 +149,9 @@ public class MapAreaExtractor implements OnTileAvailable {
 	@Override
 	public void onTileFileAvailable(int zoomLv, int x, int y, String filePath) {
 		// TODO Auto-generated method stub
-		insertTiles(zoomLv, x, y, filePath);
+		if (!ONLY_CRAWLER) {
+			insertTiles(zoomLv, x, y, filePath);
+		}
 		printProgress();
 	}
 	
@@ -183,7 +190,8 @@ public class MapAreaExtractor implements OnTileAvailable {
 	}
 	
 	public static byte[] getTileData(String tilePath, float quality) {
-		if (quality > 0 && quality < 1) {
+		String fileExtentions = tilePath.lastIndexOf(".") > 0 ? tilePath.substring(tilePath.lastIndexOf(".") + 1)  : "png";
+		if (quality > 0 && quality < 1 && "jpg".equals(fileExtentions)) {
 			return getCompressData(tilePath, quality);
 		} else {
 			try {

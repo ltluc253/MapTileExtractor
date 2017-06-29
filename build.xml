@@ -8,6 +8,10 @@
 	<!-- Java sources -->
 	<property name="src.dir" location="src" />
 
+	<property name="lib.dir" location="libs" />
+	
+	<property name="jar.classpath" location="libs" />
+	
 	<!-- Java classes -->
 	<property name="build.dir" location="bin" />
 
@@ -23,19 +27,28 @@
 
 	<target name="compile" depends="init" description="compile the source ">
 		<!-- Compile the java code from ${src.dir} into ${build.dir} -->
-		<javac includeantruntime="false" srcdir="${src.dir}" destdir="${build.dir}" />
+		<javac includeantruntime="false" srcdir="${src.dir}" destdir="${build.dir}">
+			<classpath>
+			    <pathelement path="${lib.dir}/gson-2.8.0.jar"/>
+			</classpath>
+			<classpath>
+				<pathelement path="${lib.dir}/sqlite-jdbc-3.19.3.jar"/>
+			</classpath>
+		</javac>
 	</target>
 
 	<target name="dist" depends="compile" description="package, output to JAR">
 
 		<!-- Create the distribution directory -->
 		<mkdir dir="${dist.dir}" />
-
-		<!-- Put everything in ${build} into the {$projectName}-${DSTAMP}.jar file -->
+		
+		<!-- Put everything in ${build} into the {$projectName}-${DSTAMP}.jar file -->	
 		<jar jarfile="${dist.dir}/${projectName}.jar" basedir="${build.dir}" >
+<!--			<zipgroupfileset dir="${lib-dir}" includes="*.jar"/>-->
+			<zipgroupfileset dir="${lib.dir}" includes="*.jar"/>
 		    <manifest>
-			<!-- create an executable Jar -->
-			<attribute name="Main-Class" value="com.luc.map.crawler.Crawler" />
+				<!-- create an executable Jar -->
+				<attribute name="Main-Class" value="com.luc.map.crawler.MainTask" />
 		    </manifest>
 		</jar>
 	</target>

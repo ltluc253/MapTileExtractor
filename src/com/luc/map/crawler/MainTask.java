@@ -7,12 +7,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import com.google.gson.Gson;
 import com.google.gson.annotations.SerializedName;
 
-public class MapTileExtractor {
+public class MainTask {
 
 	public static void main(String[] args) {
 		//Read input args
@@ -24,11 +25,13 @@ public class MapTileExtractor {
 		String country = null;
 		int threadCount = 100;
 		String tileFilePath = "tile_list.json";
+		String bBox = null;
+		String outputName = null;
+		int onlyCrawler = 0;
 		for (int i = 0; i < args.length; i++) {
-			if ("-zl".equals(args[i]) && (fromZl == -1 && toZl == -1)) {
-				fromZl = Integer.parseInt(args[i+1]);
-				toZl = fromZl;
-				i += 1;
+			if ("--help".equals(args[i])) {
+				printHelp();
+				return;
 			}
 			if ("-zlRange".equals(args[i])) {
 				fromZl = Integer.parseInt(args[i+1]);
@@ -69,7 +72,19 @@ public class MapTileExtractor {
 				i += 1;
 			}
 			if ("-extractedPath".equals(args[i])) {
-				MapAreaExtractor.EXTRACTED_PATH = args[i+1];
+				MbTilesExtractor.EXTRACTED_PATH = args[i+1];
+				i += 1;
+			}
+			if ("-o".equals(args[i])) {
+				outputName = args[i + 1];
+				i += 1;
+			}
+			if ("-bBox".equals(args[i])) {
+				bBox = args[i + 1];
+				i += 1;
+			}
+			if ("-onlyCrawler".equals(args[i])) {
+				MbTilesExtractor.ONLY_CRAWLER = Integer.parseInt(args[i+1]) == 1;
 				i += 1;
 			}
 		}
@@ -82,18 +97,48 @@ public class MapTileExtractor {
 			return;
 		}
 		
-		//Read Maptile list
-		MapFileItem mapFileItem = readMapAreaFromFiles(tileFilePath);
-		List<MapAreaItem> extractCities = getRetriveArea(mapFileItem.mCities, country, city);
-		if (extractCities.isEmpty()) {
-			System.out.println("No city data found");
-		} else {
-			for (MapAreaItem item : extractCities) {
-				MapAreaExtractor extractor = new MapAreaExtractor(item, fromZl, toZl, threadCount, compresFactor);
+		if (outputName != null && bBox != null) {
+			String[] bounds = bBox.split(" ");
+			if (bounds.length > 3) {
+				MapAreaItem mMapAreaItem = new MapAreaItem();
+				mMapAreaItem.setBbox(Arrays.asList(bounds));
+				mMapAreaItem.setFilename(outputName);
+				mMapAreaItem.setTitle(outputName);
+				MbTilesExtractor extractor = new MbTilesExtractor(mMapAreaItem, fromZl, toZl, threadCount, compresFactor);
 				extractor.startExtract();
+			} else {
+				System.out.println("Invalid bBox");
+			}
+		} else {
+			//Read Maptile list
+			MapFileItem mapFileItem = readMapAreaFromFiles(tileFilePath);
+			List<MapAreaItem> extractCities = getRetriveArea(mapFileItem.mCities, country, city);
+			if (extractCities.isEmpty()) {
+				System.out.println("No city data found");
+			} else {
+				for (MapAreaItem item : extractCities) {
+					MbTilesExtractor extractor = new MbTilesExtractor(item, fromZl, toZl, threadCount, compresFactor);
+					extractor.startExtract();
+				}
 			}
 		}
-		
+	}
+	
+	private static void printHelp() {
+		System.out.println("Input params: \n"
+				+ "    -zlRange : zoom level range, it is two number with lower number is placed first\n"
+				+ "    -threads: num of threads will run for this task\n"
+				+ "    -endpoint: map tile end point \n"
+				+ "    -country: search key for country \n"
+				+ "    -city: search key for city\n"
+				+ "    -compressFactor: 0~1, this param only support for jpg tile\n"
+				+ "    -tileListPath: path of tile list https://openmaptiles.com/downloads/list.json \n"
+				+ "    -storageTilePath: storage path of crawler map tiles \n"
+				+ "    -extractedPath: storage path of extracted mbtiles file \n"
+				+ "    -o: output file name it does not include mbtiles extension \n"
+				+ "    -bBox: the box of region which is extracted, the format is [leftLng bottomLat rightLng topLat] \n"
+				+ "    -onlyCrawler: 1 is only crawler map tiles, otherwise will extract to mbtiles file \n"
+				+ "Note: input -o and -bBox will extract custom area, the params -country, -city, -tileListPath won't be effect");
 	}
 	
 	private static List<MapAreaItem> getRetriveArea (List<MapAreaItem> allCities, String country, String city) {
