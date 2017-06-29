@@ -7,13 +7,13 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -29,14 +29,14 @@ import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
 import javax.imageio.stream.ImageOutputStream;
 
-
 import com.luc.map.crawler.DownloadTask.OnTileAvailable;
 
 public class MbTilesExtractor implements OnTileAvailable {
 	
-	private static final String INSERT_CMD = "INSERT INTO tiles (zoom_level,tile_column,tile_row,tile_data) VALUES (?,?,?,?)";
+	private static final String INSERT_CMD = "INSERT INTO tiles (zoom_level,tile_column,tile_row,tile_data,file_size) VALUES (?,?,?,?,?)";
 	public static String EXTRACTED_PATH = "Extracted";
-	public static boolean ONLY_CRAWLER = false; 
+	public static boolean ONLY_CRAWLER = false;
+	public static boolean COMPRESSION = true;
 	
 	private MapAreaItem mMapAreaItem;
 	private int fromZl, toZl;
@@ -68,23 +68,254 @@ public class MbTilesExtractor implements OnTileAvailable {
 	    	  dbFile.delete();
 	      }
 	      try {
-	         Class.forName("org.sqlite.JDBC");
-	         mDbConnection = DriverManager.getConnection("jdbc:sqlite:" + dbFileName);
-	         mDbConnection.setAutoCommit(false);
-	         
-	         String createTableCmd = "CREATE TABLE IF NOT EXISTS tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB);";
-	         Statement mStatement = mDbConnection.createStatement();
-	         mStatement.executeUpdate(createTableCmd);
-	         mDbConnection.commit();
+	         openDbConnection();
+	         optimizeConnection();
+	         setupConnection();
+
+	         insertMetaData("minzoom", String.valueOf(fromZl));
+	         insertMetaData("maxzoom", String.valueOf(toZl));
+	         insertMetaData("bounds", mMapAreaItem.getBounds());
 	      } catch ( Exception e ) {
 	         System.err.println( e.getClass().getName() + ": " + e.getMessage() );
 	      }
+	}
+	
+	private void openDbConnection() {
+		String dbFileName = EXTRACTED_PATH + File.separator + mMapAreaItem.getFilename() + ".mbtiles";
+		try {
+			Class.forName("org.sqlite.JDBC");
+			mDbConnection = DriverManager.getConnection("jdbc:sqlite:" + dbFileName);
+			mDbConnection.setAutoCommit(false);
+		} catch (Exception e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+	
+	private void optimizeConnection() {
+		//executeSqlCmd("PRAGMA synchronous=0");
+		executeSqlCmd("PRAGMA locking_mode=EXCLUSIVE");
+		executeSqlCmd("PRAGMA journal_mode=DELETE");
+	}
+	
+	private void setupConnection() {
+        executeSqlCmd("create table tiles (zoom_level integer,tile_column integer,tile_row integer,tile_data blob,file_size integer);");
+        executeSqlCmd("create table metadata (name text, value text);");
+        executeSqlCmd("CREATE TABLE grids (zoom_level integer, tile_column integer,tile_row integer, grid blob);");
+        executeSqlCmd("CREATE TABLE grid_data (zoom_level integer, tile_column integer, tile_row integer, key_name text, key_json text);");
+        executeSqlCmd("create unique index name on metadata (name);");
+        executeSqlCmd("create unique index tile_index on tiles (zoom_level, tile_column, tile_row);");
+	}
+	
+	private void compressionPrepare() {
+		executeSqlCmd("CREATE TABLE if not exists images (tile_data blob,tile_id integer);");
+		executeSqlCmd("CREATE TABLE if not exists map (zoom_level integer,tile_column integer,tile_row integer,tile_id integer);");
+	}
+	
+	private void doCompress(int chunk) {
+		int totalTiles = getTilesCount();
+		int lastId = 0;
+		int range = totalTiles / chunk + 1;
+		List<Integer> ids = new ArrayList<>();
+		List<ByteBuffer> files = new ArrayList<>();
+		for (int i = 0; i < range; i++) {
+			ids.clear();
+			files.clear();
+			List<Tile> tiles = getChunkTiles(chunk, i);
+			for (Tile tile : tiles) {
+				int fileIndex = files.indexOf(tile.tileImage);
+				if (fileIndex >= 0) {
+					insertMap(tile.zoomLv, tile.column, tile.row, ids.get(fileIndex));
+				} else {
+					lastId += 1;
+					
+					ids.add(lastId);
+					files.add(tile.tileImage);
+					
+					insertImage(lastId, tile.tileImage.array());
+					insertMap(tile.zoomLv, tile.column, tile.row, lastId);
+				}
+			}
+			try {
+				mDbConnection.commit();	
+			} catch (Exception e) {
+				// TODO: handle exception
+			}
+		}
+	}
+	
+	private void doCompressNew(int chunk) {
+		int lastId = 0;
+		List<Integer> ids = new ArrayList<>();
+		List<ByteBuffer> files = new ArrayList<>();
+		List<Integer> fSizes = getTileSizes();
+		for (Integer size:fSizes) {
+			List<Tile> tiles = null;
+			int offset = 0;
+			do {
+				ids.clear();
+				files.clear();
+				long start = System.currentTimeMillis();
+				tiles = getTilesBySize(size, offset, chunk);
+				long duration = System.currentTimeMillis() - start;
+				System.out.println("Duration: " + duration + ", " + tiles.size());
+				if (tiles != null && !tiles.isEmpty()) {
+					for (Tile tile : tiles) {
+						int fileIndex = files.indexOf(tile.tileImage);
+						if (fileIndex >= 0) {
+							insertMap(tile.zoomLv, tile.column, tile.row, ids.get(fileIndex));
+						} else {
+							lastId += 1;
+							
+							ids.add(lastId);
+							files.add(tile.tileImage);
+							
+							insertImage(lastId, tile.tileImage.array());
+							insertMap(tile.zoomLv, tile.column, tile.row, lastId);
+						}
+					}
+					try {
+						mDbConnection.commit();	
+					} catch (Exception e) {
+						// TODO: handle exception
+					}
+				}
+				offset += chunk;
+			} while (tiles != null && tiles.size() >= chunk);
+		}
+	}
+	
+	private void finalizedCompress() {
+		executeSqlCmd("drop table tiles;");
+		executeSqlCmd("create view tiles as select map.zoom_level as zoom_level, map.tile_column as tile_column, map.tile_row as tile_row, images.tile_data as tile_data FROM map JOIN images on images.tile_id = map.tile_id;");
+		executeSqlCmd("CREATE UNIQUE INDEX map_index on map (zoom_level, tile_column, tile_row);");
+		executeSqlCmd("CREATE UNIQUE INDEX images_id on images (tile_id);");
+	}
+	
+	private void optimizeDb() {
+		executeSqlCmd("end transaction;");
+		executeSqlCmd("ANALYZE;");
+		executeSqlCmd("VACUUM;");
+	}
+	
+	private int getTilesCount() {
+		int tilesCount = 0;
+		try {
+			Statement statement = mDbConnection.createStatement();
+			ResultSet rSet = statement.executeQuery("select count(zoom_level) from tiles");
+			tilesCount = rSet.getInt(1);
+			rSet.close();
+			statement.close();
+		} catch (Exception e) {
+			// TODO: handle exception
+		}
+		return tilesCount;		
+	}
+	
+	private List<Integer> getTileSizes() {
+		List<Integer> rSizes = new ArrayList<>();
+		try {
+			Statement statement = mDbConnection.createStatement();
+			String cmd = String.format("select distinct(file_size) from tiles order by file_size asc");
+			ResultSet rSet = statement.executeQuery(cmd);
+			while (rSet.next()) {
+				rSizes.add(rSet.getInt(1));				
+			}
+			rSet.close();
+			statement.close();
+		} catch (Exception e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
+		return rSizes;
+	}
+	
+	private List<Tile> getChunkTiles(int chunk, int index) {
+		List<Tile> rTiles = new ArrayList<>();
+		try {
+			Statement statement = mDbConnection.createStatement();
+			String cmd = String.format("select zoom_level, tile_column, tile_row, tile_data from tiles limit %d offset %d", chunk, chunk * index);
+			ResultSet rSet = statement.executeQuery(cmd);
+			while (rSet.next()) {
+				rTiles.add(new Tile(rSet.getInt(1), rSet.getInt(2), rSet.getInt(3), rSet.getBytes(4)));				
+			}
+			rSet.close();
+			statement.close();
+		} catch (Exception e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
+		return rTiles;
+	}
+	
+	private List<Tile> getTilesBySize(int size, int offset, int limit) {
+		List<Tile> rTiles = new ArrayList<>();
+		try {
+			Statement statement = mDbConnection.createStatement();
+			String cmd = String.format("select zoom_level, tile_column, tile_row, tile_data from tiles where file_size=%d limit %d offset %d", size, limit, offset);
+			ResultSet rSet = statement.executeQuery(cmd);
+			while (rSet.next()) {
+				rTiles.add(new Tile(rSet.getInt(1), rSet.getInt(2), rSet.getInt(3), rSet.getBytes(4)));				
+			}
+			rSet.close();
+			statement.close();
+		} catch (Exception e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
+		return rTiles;
+	}
+	
+	private void insertMap(int zoomLevel, int column, int row, int tileId) {
+		try {
+			Statement statement = mDbConnection.createStatement();
+			String cmd = String.format("insert into map (zoom_level, tile_column, tile_row, tile_id) values (%d, %d, %d, %d)", zoomLevel, column, row, tileId);
+			statement.executeUpdate(cmd);
+			statement.close();
+		} catch (Exception e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}
+	}
+	
+	private void insertImage(int tileId, byte[] tileData) {
+		try {
+			PreparedStatement statement = mDbConnection.prepareStatement("insert into images (tile_id, tile_data) values (?, ?)");
+			statement.setInt(1, tileId);
+			statement.setBytes(2, tileData);
+			statement.executeUpdate();
+			statement.close();
+		} catch (Exception e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}		
+	}
+	
+	private void insertMetaData(String key, String value) {
+		try {
+			Statement statement = mDbConnection.createStatement();
+			String cmd = String.format("insert into metadata (name, value) values (\"%s\", \"%s\")", key, value);
+			statement.executeUpdate(cmd);
+			statement.close();
+		} catch (Exception e) {
+			// TODO: handle exception
+			e.printStackTrace();
+		}	
+	}
+	
+	private void executeSqlCmd(String cmd) {
+		try {
+			Statement mStatement = mDbConnection.createStatement();
+	        mStatement.executeUpdate(cmd);
+	        mDbConnection.commit();
+		} catch (Exception e) {
+			//e.printStackTrace();
+		}
 	}
 
 	private void closeDb() {
 		if (mDbConnection != null) {
 			try {
-				preparedStatement.close();
 				mDbConnection.commit();
 				mDbConnection.close();
 			}catch (Exception e) {
@@ -137,7 +368,16 @@ public class MbTilesExtractor implements OnTileAvailable {
         	e.printStackTrace();
 		} finally {
 			if (!ONLY_CRAWLER) {
-				closeDb();
+				if (COMPRESSION) {
+					System.out.println("Start Compression");
+					compressionPrepare();
+					doCompress(512);
+					closeDb();
+					openDbConnection();
+					finalizedCompress();
+					System.out.println("Compression Complete");
+				}
+				optimizeDb();
 			}
 		}
 	}
@@ -160,11 +400,14 @@ public class MbTilesExtractor implements OnTileAvailable {
 		if (mDbConnection != null && tileFile.exists()) {
 			try {
 				preparedStatement = mDbConnection.prepareStatement(INSERT_CMD);
+				byte[] tileData = getTileData(filePath, mCompressQuality);
 				preparedStatement.setInt(1, zoomLv);
 				preparedStatement.setInt(2, x);
 				preparedStatement.setInt(3, swapRow(zoomLv, y));
-				preparedStatement.setBytes(4, getTileData(filePath, mCompressQuality));
+				preparedStatement.setBytes(4, tileData);
+				preparedStatement.setInt(5, tileData != null ? tileData.length : 0);
 				preparedStatement.executeUpdate();
+				preparedStatement.close();
 			} catch (SQLException e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
@@ -252,5 +495,20 @@ public class MbTilesExtractor implements OnTileAvailable {
 	
 	private static int swapRow(int zoomLevel,int y) {
 		return ((int) (Math.pow(2, zoomLevel) - y) - 1);
+	}
+	
+	private class Tile {
+		int zoomLv;
+		int column;
+		int row;
+		ByteBuffer tileImage;
+		public Tile(int zoomLv, int column, int row, byte[] tileImage) {
+			this.zoomLv = zoomLv;
+			this.column = column;
+			this.row = row;
+			this.tileImage = ByteBuffer.wrap(tileImage);
+		}
+		
+		
 	}
 }

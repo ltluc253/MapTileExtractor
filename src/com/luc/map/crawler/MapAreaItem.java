@@ -91,4 +91,12 @@ public class MapAreaItem {
     public void setBbox(List<String> mBbox) {
         this.mBbox = mBbox;
     }
+    
+    public String getBounds() {
+    	String bounds = "";
+    	for (int i = 0; i < mBbox.size(); i++) {
+    		bounds += mBbox.get(i) + (i < mBbox.size() - 1 ? "," : "");
+    	}
+    	return bounds;
+    }
 }

@@ -1,10 +1,7 @@
 package com.luc.map.crawler;
 
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,7 +24,6 @@ public class MainTask {
 		String tileFilePath = "tile_list.json";
 		String bBox = null;
 		String outputName = null;
-		int onlyCrawler = 0;
 		for (int i = 0; i < args.length; i++) {
 			if ("--help".equals(args[i])) {
 				printHelp();
@@ -84,8 +80,10 @@ public class MainTask {
 				i += 1;
 			}
 			if ("-onlyCrawler".equals(args[i])) {
-				MbTilesExtractor.ONLY_CRAWLER = Integer.parseInt(args[i+1]) == 1;
-				i += 1;
+				MbTilesExtractor.ONLY_CRAWLER = true;
+			}
+			if ("-noCompression".equals(args[i])) {
+				MbTilesExtractor.COMPRESSION = false;
 			}
 		}
 		if (fromZl < 1 || toZl < 1 || fromZl > 22 || toZl > 22) {
@@ -131,13 +129,14 @@ public class MainTask {
 				+ "    -endpoint: map tile end point \n"
 				+ "    -country: search key for country \n"
 				+ "    -city: search key for city\n"
-				+ "    -compressFactor: 0~1, this param only support for jpg tile\n"
+				+ "    -compressFactor: 0~1, this param only support for jpg tile => choose it package process will run slowly\n"
 				+ "    -tileListPath: path of tile list https://openmaptiles.com/downloads/list.json \n"
 				+ "    -storageTilePath: storage path of crawler map tiles, default value is MapData\n"
 				+ "    -extractedPath: storage path of extracted mbtiles file, default value is Extracted\n"
 				+ "    -o: output file name it does not include mbtiles extension \n"
 				+ "    -bBox: the box of region which is extracted, the format is [leftLng bottomLat rightLng topLat] \n"
-				+ "    -onlyCrawler: 1 is only crawler map tiles, otherwise will extract to mbtiles file \n"
+				+ "    -onlyCrawler: only crawler map data \n"
+				+ "    -noCompression: no run compression, help run faster but file size will be larger \n"
 				+ "Note: input -o and -bBox will extract custom area, the params -country, -city, -tileListPath won't be effect");
 	}
 	
